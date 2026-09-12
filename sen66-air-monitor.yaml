@@ -1,0 +1,230 @@
+esphome:
+  name: sen66-air-monitor
+  friendly_name: SEN66 Air Monitor
+
+esp32:
+  board: seeed_xiao_esp32c3
+  framework:
+    type: esp-idf
+
+# Use the ESP32-C3 native USB port for logs. This leaves GPIO20/D7 free
+# for the display BUSY signal.
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "SEN66 Fallback"
+    password: test1234
+
+captive_portal:
+
+time:
+  - platform: sntp
+    id: network_time
+    timezone: Europe/Zurich
+
+# SEN66 I2C bus
+i2c:
+  id: sen66_bus
+  sda: GPIO6       # D4
+  scl: GPIO7       # D5
+  frequency: 100kHz
+  scan: true
+
+# E-paper SPI bus
+spi:
+  clk_pin: GPIO8   # D8 / display CLK or SCL
+  mosi_pin: GPIO10 # D10 / display DIN or SDA
+
+sensor:
+  - platform: sen6x
+    type: SEN66
+    i2c_id: sen66_bus
+    address: 0x6B
+    update_interval: 30s
+
+    temperature:
+      name: "Temperature"
+      id: sen66_temperature
+
+    humidity:
+      name: "Humidity"
+      id: sen66_humidity
+
+    co2:
+      name: "CO2"
+      id: sen66_co2
+
+    pm_1_0:
+      name: "PM1.0"
+      id: sen66_pm_1
+
+    pm_2_5:
+      name: "PM2.5"
+      id: sen66_pm_2_5
+
+    pm_4_0:
+      name: "PM4.0"
+      id: sen66_pm_4
+
+    pm_10_0:
+      name: "PM10"
+      id: sen66_pm_10
+
+    voc_index:
+      name: "VOC Index"
+      id: sen66_voc
+
+    nox_index:
+      name: "NOx Index"
+      id: sen66_nox
+
+font:
+  - file: "gfonts://Roboto Mono"
+    id: font_tiny
+    size: 9
+
+  - file: "gfonts://Roboto Mono"
+    id: font_small
+    size: 12
+
+  - file: "gfonts://Roboto Mono"
+    id: font_medium
+    size: 16
+
+  - file: "gfonts://Roboto Mono"
+    id: font_large
+    size: 30
+
+display:
+  - platform: waveshare_epaper
+    id: epaper_display
+    model: 1.54inv2
+
+    cs_pin: GPIO2       # D0
+    dc_pin: GPIO3       # D1
+    reset_pin: GPIO4    # D2
+    busy_pin: GPIO20    # D7
+
+    # Rotate the complete interface for horizontal mounting. Because the
+    # display is square, this changes its reading direction, not its size.
+    rotation: 90
+    update_interval: 60s
+    full_update_every: 10
+
+    lambda: |-
+      // AQAIO-inspired inverted dashboard, arranged in two columns.
+      const Color ink = COLOR_ON;       // black on e-paper
+      const Color paper = COLOR_OFF;    // white on e-paper
+      it.fill(ink);
+
+      auto text = [&](int x, int y, auto font, TextAlign align,
+                      const char *value) {
+        it.print(x, y, font, paper, align, value, ink);
+      };
+
+      auto value = [&](int x, int y, auto font, TextAlign align,
+                       float reading, const char *format) {
+        if (isnan(reading)) {
+          it.print(x, y, font, paper, align, "--", ink);
+        } else {
+          it.printf(x, y, font, paper, ink, align, format, reading);
+        }
+      };
+
+      // Temperature and humidity header.
+      text(5, 3, id(font_tiny), TextAlign::TOP_LEFT, "TEMP");
+      value(50, 15, id(font_medium), TextAlign::CENTER,
+            id(sen66_temperature).state, "%.1f C");
+
+      text(108, 3, id(font_tiny), TextAlign::TOP_LEFT, "HUMIDITY");
+      value(154, 15, id(font_medium), TextAlign::CENTER,
+            id(sen66_humidity).state, "%.1f %%");
+
+      it.horizontal_line(5, 37, 190, paper);
+      it.horizontal_line(5, 38, 190, paper);
+      it.vertical_line(103, 44, 137, paper);
+
+      // Left column: gases and overall air-quality face.
+      text(52, 46, id(font_small), TextAlign::TOP_CENTER, "CO2");
+      value(52, 69, id(font_large), TextAlign::CENTER,
+            id(sen66_co2).state, "%.0f");
+      text(52, 91, id(font_tiny), TextAlign::TOP_CENTER, "PPM");
+
+      text(6, 108, id(font_small), TextAlign::TOP_LEFT, "VOC");
+      value(97, 108, id(font_medium), TextAlign::TOP_RIGHT,
+            id(sen66_voc).state, "%.0f");
+
+      text(6, 130, id(font_small), TextAlign::TOP_LEFT, "NOX");
+      value(97, 130, id(font_medium), TextAlign::TOP_RIGHT,
+            id(sen66_nox).state, "%.0f");
+
+      bool data_ready = !isnan(id(sen66_co2).state) &&
+                        !isnan(id(sen66_voc).state) &&
+                        !isnan(id(sen66_nox).state) &&
+                        !isnan(id(sen66_pm_2_5).state);
+      bool air_good = data_ready && id(sen66_co2).state < 1000 &&
+                      id(sen66_voc).state < 150 &&
+                      id(sen66_nox).state <= 10 &&
+                      id(sen66_pm_2_5).state < 12;
+
+      // Pixel-style status face.
+      it.circle(52, 163, 16, paper);
+      it.filled_circle(46, 158, 2, paper);
+      it.filled_circle(58, 158, 2, paper);
+      if (!data_ready) {
+        it.horizontal_line(45, 168, 15, paper);
+      } else if (air_good) {
+        it.line(44, 166, 48, 170, paper);
+        it.horizontal_line(48, 170, 9, paper);
+        it.line(57, 170, 61, 166, paper);
+      } else {
+        it.line(44, 171, 48, 167, paper);
+        it.horizontal_line(48, 167, 9, paper);
+        it.line(57, 167, 61, 171, paper);
+      }
+
+      // Right column: particulate measurements.
+      text(151, 46, id(font_small), TextAlign::TOP_CENTER, "PARTICLES");
+      text(151, 60, id(font_tiny), TextAlign::TOP_CENTER, "ug/m3");
+
+      text(110, 77, id(font_small), TextAlign::TOP_LEFT, "PM1");
+      value(195, 76, id(font_medium), TextAlign::TOP_RIGHT,
+            id(sen66_pm_1).state, "%.1f");
+
+      text(110, 99, id(font_small), TextAlign::TOP_LEFT, "PM2.5");
+      value(195, 98, id(font_medium), TextAlign::TOP_RIGHT,
+            id(sen66_pm_2_5).state, "%.1f");
+
+      text(110, 121, id(font_small), TextAlign::TOP_LEFT, "PM4");
+      value(195, 120, id(font_medium), TextAlign::TOP_RIGHT,
+            id(sen66_pm_4).state, "%.1f");
+
+      text(110, 143, id(font_small), TextAlign::TOP_LEFT, "PM10");
+      value(195, 142, id(font_medium), TextAlign::TOP_RIGHT,
+            id(sen66_pm_10).state, "%.1f");
+
+      text(151, 166, id(font_tiny), TextAlign::TOP_CENTER,
+           air_good ? "AIR QUALITY GOOD" :
+           (data_ready ? "CHECK AIR QUALITY" : "SENSOR WARMING"));
+
+      // Footer clock. It remains useful without Home Assistant and shows
+      // --:-- until Wi-Fi has supplied network time.
+      it.horizontal_line(5, 183, 190, paper);
+      auto now = id(network_time).now();
+      if (now.is_valid()) {
+        it.strftime(195, 187, id(font_tiny), paper, ink,
+                    TextAlign::TOP_RIGHT, "UPDATED %H:%M", now);
+      } else {
+        text(195, 187, id(font_tiny), TextAlign::TOP_RIGHT,
+             "UPDATED --:--");
+      }
