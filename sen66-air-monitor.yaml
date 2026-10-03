@@ -94,6 +94,15 @@ sensor:
       name: "NOx Index"
       id: sen66_nox
 
+# Keeps the e-paper RST line (D2) high so the panel never resets between
+# updates. See the note on the display below.
+switch:
+  - platform: gpio
+    id: epaper_reset
+    pin: GPIO4          # D2
+    restore_mode: ALWAYS_ON
+    internal: true
+
 # Atkinson Hyperlegible Next keeps digits and letters distinct at a glance.
 font:
   - file: &atkinson_bold
@@ -156,8 +165,11 @@ display:
 
     cs_pin: GPIO2       # D0
     dc_pin: GPIO3       # D1
-    reset_pin: GPIO4    # D2
     busy_pin: GPIO20    # D7
+    # No reset_pin on purpose: with it, the driver resets the panel before
+    # every update, which wipes the previous frame that partial refreshes
+    # need, so old text stays visible under the new one. RST (D2) is held
+    # high by the epaper_reset switch below instead.
 
     # Rotate the complete interface for horizontal mounting. Because the
     # display is square, this changes its reading direction, not its size.

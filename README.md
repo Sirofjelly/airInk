@@ -102,10 +102,15 @@ The script needs Pillow, which is already installed in the ESPHome virtual envir
 - Change `rotation: 90` to `rotation: 270` if the display is upside down in your enclosure.
 - Change `timezone: Europe/Zurich` to your local timezone.
 - If an older display is used, try `model: 1.54in` instead of `1.54inv2`.
-- If a newer e-paper driver board does not reset correctly, try adding `reset_duration: 2ms` under `display:`.
 - Tune the comfort zone and the other status thresholds in [`airink.h`](airink.h).
 
 The display refreshes once per minute and performs a full refresh every ten updates.
+
+The e-paper RST line is held high by an internal switch instead of being given to the display as `reset_pin`. With `reset_pin`, ESPHome resets the panel before every update, which erases the previous frame that partial refreshes compare against, so old text stays visible under the new one.
+
+## Case
+
+A 3D-printable mini Mac case lives in [case/](case/README.md), with an OpenSCAD source and ready-to-print STL files.
 
 ## Design credit
 
