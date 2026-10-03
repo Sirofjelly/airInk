@@ -2,16 +2,15 @@
 
 A compact ESPHome air-quality monitor built with a Sensirion SEN66, a Seeed Studio XIAO ESP32-C3, and a 1.54-inch black-and-white e-paper display.
 
-The 200×200 interface uses an inverted, two-column dashboard for horizontal mounting and exposes all measurements to Home Assistant.
+The 200×200 black-on-white screen is made to be read from a desk at 30–40 cm. Chueli the cow shows how the air feels, with a status line in Swiss German, and all measurements are exposed to Home Assistant.
 
 ## Features
 
-- Temperature and relative humidity
-- CO₂ concentration
-- VOC and NOx indices
-- PM1.0, PM2.5, PM4.0, and PM10
+- Big CO₂, temperature, and humidity readings in Atkinson Hyperlegible Next
+- Chueli the cow, with one face per air-quality status
+- PM2.5 and VOC in the footer; NOx appears there when it is the reason for the status
+- PM1.0, PM4.0, PM10, and NOx sent to Home Assistant
 - Offline display operation after boot
-- Happy/sad air-quality indicator
 - Home Assistant native API
 - USB logging and ESPHome OTA updates
 - Periodic full refresh to limit e-paper ghosting
@@ -68,18 +67,49 @@ esphome run sen66-air-monitor.yaml
 
 For the first USB installation, put the XIAO into its bootloader if necessary by holding **BOOT** while connecting USB.
 
+## Statuses
+
+Only one status is shown at a time; the first matching row wins. The thresholds live at the top of [`airink.h`](airink.h).
+
+| Status | When | Chueli |
+|---|---|---|
+| Chueli wacht uf… | sensor still warming up | snoozing |
+| Brännt's öppe? | PM2.5 above 50 µg/m³ | wide-eyed, smoke clouds |
+| Fänschter uf! | CO₂ above 1400 ppm | dizzy, bell ringing |
+| Raclette-Ziit? | VOC above 200 and PM2.5 above 15 on a November–March evening | licking her lips |
+| Hesch gfurzt? | VOC rises by 100 or more within 5 minutes | squinting, stink lines |
+| Zürcherstrass! | NOx index above 20 | coughing |
+| Bitzeli stickig. | CO₂ 1000–1400 ppm | yawning |
+| Z'heiss. | above 25 °C | sweating |
+| Pulli aalegge. | below 19 °C | scarf, shivering |
+| Hallebad-Luft. | humidity above 65 % | water drops |
+| Wie i de Sahara. | humidity below 35 % | tongue out, sun |
+| Alles guet. / Tiptop. / Muuh-tastisch. | everything fine (rotates every ten minutes) | happy |
+
+## Chueli images
+
+The faces in `images/chueli/` are generated as 1-bit PNGs from the drawings in [`tools/make_chueli.py`](tools/make_chueli.py). After changing a drawing, regenerate them with:
+
+```bash
+brew install librsvg
+python tools/make_chueli.py
+```
+
+The script needs Pillow, which is already installed in the ESPHome virtual environment.
+
 ## Configuration
 
 - Change `rotation: 90` to `rotation: 270` if the display is upside down in your enclosure.
 - Change `timezone: Europe/Zurich` to your local timezone.
 - If an older display is used, try `model: 1.54in` instead of `1.54inv2`.
 - If a newer e-paper driver board does not reset correctly, try adding `reset_duration: 2ms` under `display:`.
+- Tune the comfort zone and the other status thresholds in [`airink.h`](airink.h).
 
 The display refreshes once per minute and performs a full refresh every ten updates.
 
 ## Design credit
 
-The visual direction is inspired by [AQAIO](https://github.com/w4ilun/aqaio). airInk uses ESPHome's native SEN6x and Waveshare e-paper components rather than the AQAIO custom component.
+The original dashboard was inspired by [AQAIO](https://github.com/w4ilun/aqaio). airInk uses ESPHome's native SEN6x and Waveshare e-paper components rather than the AQAIO custom component.
 
 ## License
 
