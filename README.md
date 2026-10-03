@@ -77,6 +77,10 @@ For the first USB installation, put the XIAO into its bootloader if necessary by
 
 The display refreshes once per minute and performs a full refresh every ten updates.
 
+## Case
+
+A 3D-printable mini Mac case lives in [case/](case/README.md), with an OpenSCAD source and ready-to-print STL files.
+
 ## Design credit
 
 The visual direction is inspired by [AQAIO](https://github.com/w4ilun/aqaio). airInk uses ESPHome's native SEN6x and Waveshare e-paper components rather than the AQAIO custom component.
