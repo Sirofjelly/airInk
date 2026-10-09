@@ -1,6 +1,9 @@
 esphome:
   name: sen66-air-monitor
   friendly_name: SEN66 Air Monitor
+  # Chueli's status logic and thresholds.
+  includes:
+    - airink.h
 
 esp32:
   board: seeed_xiao_esp32c3
@@ -83,27 +86,77 @@ sensor:
     voc_index:
       name: "VOC Index"
       id: sen66_voc
+      # Keep a few minutes of history for the "Hesch gfurzt?" detector.
+      on_value:
+        - lambda: airink::record_voc(x);
 
     nox_index:
       name: "NOx Index"
       id: sen66_nox
 
+# Keeps the e-paper RST line (D2) high so the panel never resets between
+# updates. See the note on the display below.
+switch:
+  - platform: gpio
+    id: epaper_reset
+    pin: GPIO4          # D2
+    restore_mode: ALWAYS_ON
+    internal: true
+
+# Atkinson Hyperlegible Next keeps digits and letters distinct at a glance.
 font:
-  - file: "gfonts://Roboto Mono"
-    id: font_tiny
-    size: 9
+  - file: &atkinson_bold
+      type: gfonts
+      family: Atkinson Hyperlegible Next
+      weight: 700
+    id: font_co2
+    size: 44
+    glyphs: "0123456789-"
 
-  - file: "gfonts://Roboto Mono"
+  - file: *atkinson_bold
+    id: font_big
+    size: 40
+    glyphs: "0123456789-"
+
+  # Status line plus the small decimal and unit next to the big numbers.
+  - file: *atkinson_bold
+    id: font_status
+    size: 20
+    glyphs: &text_glyphs " !'-.:0123456789?%°…ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzäöüÄÖÜ"
+
+  - file: *atkinson_bold
+    id: font_time
+    size: 14
+    glyphs: "0123456789:-"
+
+  - file: &atkinson_regular
+      type: gfonts
+      family: Atkinson Hyperlegible Next
+      weight: 400
     id: font_small
-    size: 12
+    size: 14
+    glyphs: *text_glyphs
 
-  - file: "gfonts://Roboto Mono"
-    id: font_medium
-    size: 16
+  # The font has no subscript ₂, so CO₂ gets a small "2" instead.
+  - file: *atkinson_regular
+    id: font_subscript
+    size: 10
+    glyphs: "2"
 
-  - file: "gfonts://Roboto Mono"
-    id: font_large
-    size: 30
+# Chueli the cow, one face per status. Regenerate with tools/make_chueli.py.
+image:
+  - { platform: file, file: images/chueli/boot.png, id: chueli_boot, type: BINARY }
+  - { platform: file, file: images/chueli/happy.png, id: chueli_happy, type: BINARY }
+  - { platform: file, file: images/chueli/sleepy.png, id: chueli_sleepy, type: BINARY }
+  - { platform: file, file: images/chueli/dizzy.png, id: chueli_dizzy, type: BINARY }
+  - { platform: file, file: images/chueli/stink.png, id: chueli_stink, type: BINARY }
+  - { platform: file, file: images/chueli/smoke.png, id: chueli_smoke, type: BINARY }
+  - { platform: file, file: images/chueli/raclette.png, id: chueli_raclette, type: BINARY }
+  - { platform: file, file: images/chueli/cough.png, id: chueli_cough, type: BINARY }
+  - { platform: file, file: images/chueli/hot.png, id: chueli_hot, type: BINARY }
+  - { platform: file, file: images/chueli/cold.png, id: chueli_cold, type: BINARY }
+  - { platform: file, file: images/chueli/humid.png, id: chueli_humid, type: BINARY }
+  - { platform: file, file: images/chueli/dry.png, id: chueli_dry, type: BINARY }
 
 display:
   - platform: waveshare_epaper
@@ -112,8 +165,11 @@ display:
 
     cs_pin: GPIO2       # D0
     dc_pin: GPIO3       # D1
-    reset_pin: GPIO4    # D2
     busy_pin: GPIO20    # D7
+    # No reset_pin on purpose: with it, the driver resets the panel before
+    # every update, which wipes the previous frame that partial refreshes
+    # need, so old text stays visible under the new one. RST (D2) is held
+    # high by the epaper_reset switch below instead.
 
     # Rotate the complete interface for horizontal mounting. Because the
     # display is square, this changes its reading direction, not its size.
@@ -122,109 +178,114 @@ display:
     full_update_every: 10
 
     lambda: |-
-      // AQAIO-inspired inverted dashboard, arranged in two columns.
+      // Black on white: Chueli top left, big numbers, one status line and a
+      // small footer. Sized to be read from 30–40 cm.
       const Color ink = COLOR_ON;       // black on e-paper
       const Color paper = COLOR_OFF;    // white on e-paper
-      it.fill(ink);
+      it.fill(paper);
 
-      auto text = [&](int x, int y, auto font, TextAlign align,
-                      const char *value) {
-        it.print(x, y, font, paper, align, value, ink);
+      auto width = [&](font::Font *font, const char *text) {
+        int x1, y1, w, h;
+        it.get_text_bounds(0, 0, text, font, TextAlign::BASELINE_LEFT,
+                           &x1, &y1, &w, &h);
+        return w;
       };
 
-      auto value = [&](int x, int y, auto font, TextAlign align,
-                       float reading, const char *format) {
-        if (isnan(reading)) {
-          it.print(x, y, font, paper, align, "--", ink);
-        } else {
-          it.printf(x, y, font, paper, ink, align, format, reading);
-        }
-      };
+      float co2 = id(sen66_co2).state;
+      float pm25 = id(sen66_pm_2_5).state;
+      float voc = id(sen66_voc).state;
+      float nox = id(sen66_nox).state;
+      float temp = id(sen66_temperature).state;
+      float humidity = id(sen66_humidity).state;
 
-      // Temperature and humidity header.
-      text(5, 3, id(font_tiny), TextAlign::TOP_LEFT, "TEMP");
-      value(50, 15, id(font_medium), TextAlign::CENTER,
-            id(sen66_temperature).state, "%.1f C");
+      auto now = id(network_time).now();
+      auto status = airink::pick_status(co2, pm25, voc, nox, temp, humidity,
+                                        now.is_valid(), now.month, now.hour,
+                                        now.minute);
 
-      text(108, 3, id(font_tiny), TextAlign::TOP_LEFT, "HUMIDITY");
-      value(154, 15, id(font_medium), TextAlign::CENTER,
-            id(sen66_humidity).state, "%.1f %%");
+      // Chueli. White pixels in the PNG are "on", so paper is passed first.
+      image::Image *face = id(chueli_boot);
+      switch (status.mood) {
+        case airink::Mood::Happy: face = id(chueli_happy); break;
+        case airink::Mood::Sleepy: face = id(chueli_sleepy); break;
+        case airink::Mood::Dizzy: face = id(chueli_dizzy); break;
+        case airink::Mood::Stink: face = id(chueli_stink); break;
+        case airink::Mood::Smoke: face = id(chueli_smoke); break;
+        case airink::Mood::Raclette: face = id(chueli_raclette); break;
+        case airink::Mood::Cough: face = id(chueli_cough); break;
+        case airink::Mood::Hot: face = id(chueli_hot); break;
+        case airink::Mood::Cold: face = id(chueli_cold); break;
+        case airink::Mood::Humid: face = id(chueli_humid); break;
+        case airink::Mood::Dry: face = id(chueli_dry); break;
+        case airink::Mood::Boot: break;
+      }
+      it.image(3, 3, face, paper, ink);
 
-      it.horizontal_line(5, 37, 190, paper);
-      it.horizontal_line(5, 38, 190, paper);
-      it.vertical_line(103, 44, 137, paper);
-
-      // Left column: gases and overall air-quality face.
-      text(52, 46, id(font_small), TextAlign::TOP_CENTER, "CO2");
-      value(52, 69, id(font_large), TextAlign::CENTER,
-            id(sen66_co2).state, "%.0f");
-      text(52, 91, id(font_tiny), TextAlign::TOP_CENTER, "PPM");
-
-      text(6, 108, id(font_small), TextAlign::TOP_LEFT, "VOC");
-      value(97, 108, id(font_medium), TextAlign::TOP_RIGHT,
-            id(sen66_voc).state, "%.0f");
-
-      text(6, 130, id(font_small), TextAlign::TOP_LEFT, "NOX");
-      value(97, 130, id(font_medium), TextAlign::TOP_RIGHT,
-            id(sen66_nox).state, "%.0f");
-
-      bool data_ready = !isnan(id(sen66_co2).state) &&
-                        !isnan(id(sen66_voc).state) &&
-                        !isnan(id(sen66_nox).state) &&
-                        !isnan(id(sen66_pm_2_5).state);
-      bool air_good = data_ready && id(sen66_co2).state < 1000 &&
-                      id(sen66_voc).state < 150 &&
-                      id(sen66_nox).state <= 10 &&
-                      id(sen66_pm_2_5).state < 12;
-
-      // Pixel-style status face.
-      it.circle(52, 163, 16, paper);
-      it.filled_circle(46, 158, 2, paper);
-      it.filled_circle(58, 158, 2, paper);
-      if (!data_ready) {
-        it.horizontal_line(45, 168, 15, paper);
-      } else if (air_good) {
-        it.line(44, 166, 48, 170, paper);
-        it.horizontal_line(48, 170, 9, paper);
-        it.line(57, 170, 61, 166, paper);
+      // CO₂, the number that says when to open a window.
+      it.print(190, 22, id(font_small), ink, TextAlign::BASELINE_RIGHT, "ppm");
+      int label_x = 190 - width(id(font_small), "ppm") - 4;
+      it.print(label_x, 25, id(font_subscript), ink, TextAlign::BASELINE_RIGHT, "2");
+      label_x -= width(id(font_subscript), "2");
+      it.print(label_x, 22, id(font_small), ink, TextAlign::BASELINE_RIGHT, "CO");
+      if (isnan(co2)) {
+        it.print(190, 66, id(font_co2), ink, TextAlign::BASELINE_RIGHT, "--");
       } else {
-        it.line(44, 171, 48, 167, paper);
-        it.horizontal_line(48, 167, 9, paper);
-        it.line(57, 167, 61, 171, paper);
+        it.printf(190, 66, id(font_co2), ink, TextAlign::BASELINE_RIGHT, "%.0f", co2);
       }
 
-      // Right column: particulate measurements.
-      text(151, 46, id(font_small), TextAlign::TOP_CENTER, "PARTICLES");
-      text(151, 60, id(font_tiny), TextAlign::TOP_CENTER, "ug/m3");
+      it.filled_rectangle(10, 78, 180, 2, ink);
 
-      text(110, 77, id(font_small), TextAlign::TOP_LEFT, "PM1");
-      value(195, 76, id(font_medium), TextAlign::TOP_RIGHT,
-            id(sen66_pm_1).state, "%.1f");
+      // Temperature with a small decimal, e.g. 21 + ".6°".
+      char whole[12] = "--";
+      char decimal[12] = "°";
+      if (!isnan(temp)) {
+        char reading[12];
+        snprintf(reading, sizeof(reading), "%.1f", temp);
+        char *point = strchr(reading, '.');
+        snprintf(decimal, sizeof(decimal), "%s°", point);
+        *point = '\0';
+        snprintf(whole, sizeof(whole), "%s", reading);
+      }
+      it.print(10, 122, id(font_big), ink, TextAlign::BASELINE_LEFT, whole);
+      it.print(10 + width(id(font_big), whole), 122, id(font_status), ink,
+               TextAlign::BASELINE_LEFT, decimal);
 
-      text(110, 99, id(font_small), TextAlign::TOP_LEFT, "PM2.5");
-      value(195, 98, id(font_medium), TextAlign::TOP_RIGHT,
-            id(sen66_pm_2_5).state, "%.1f");
+      it.filled_rectangle(104, 88, 1, 38, ink);
 
-      text(110, 121, id(font_small), TextAlign::TOP_LEFT, "PM4");
-      value(195, 120, id(font_medium), TextAlign::TOP_RIGHT,
-            id(sen66_pm_4).state, "%.1f");
-
-      text(110, 143, id(font_small), TextAlign::TOP_LEFT, "PM10");
-      value(195, 142, id(font_medium), TextAlign::TOP_RIGHT,
-            id(sen66_pm_10).state, "%.1f");
-
-      text(151, 166, id(font_tiny), TextAlign::TOP_CENTER,
-           air_good ? "AIR QUALITY GOOD" :
-           (data_ready ? "CHECK AIR QUALITY" : "SENSOR WARMING"));
-
-      // Footer clock. It remains useful without Home Assistant and shows
-      // --:-- until Wi-Fi has supplied network time.
-      it.horizontal_line(5, 183, 190, paper);
-      auto now = id(network_time).now();
-      if (now.is_valid()) {
-        it.strftime(195, 187, id(font_tiny), paper, ink,
-                    TextAlign::TOP_RIGHT, "UPDATED %H:%M", now);
+      // Humidity with a small percent sign.
+      it.print(190, 122, id(font_status), ink, TextAlign::BASELINE_RIGHT, "%");
+      int humidity_x = 190 - width(id(font_status), "%");
+      if (isnan(humidity)) {
+        it.print(humidity_x, 122, id(font_big), ink, TextAlign::BASELINE_RIGHT, "--");
       } else {
-        text(195, 187, id(font_tiny), TextAlign::TOP_RIGHT,
-             "UPDATED --:--");
+        it.printf(humidity_x, 122, id(font_big), ink, TextAlign::BASELINE_RIGHT,
+                  "%.0f", humidity);
+      }
+
+      it.filled_rectangle(10, 132, 180, 2, ink);
+
+      // Chueli's status line. Every status looks the same; only the words
+      // and the face change.
+      it.print(10, 161, id(font_status), ink, TextAlign::BASELINE_LEFT, status.text);
+
+      // Footer: PM2.5, VOC (or NOx when it is the reason) and the time.
+      if (isnan(pm25)) {
+        it.print(10, 190, id(font_small), ink, TextAlign::BASELINE_LEFT, "PM --");
+      } else {
+        it.printf(10, 190, id(font_small), ink, TextAlign::BASELINE_LEFT, "PM %.0f", pm25);
+      }
+
+      const char *gas_label = status.show_nox ? "NOx" : "VOC";
+      float gas = status.show_nox ? nox : voc;
+      if (isnan(gas)) {
+        it.printf(78, 190, id(font_small), ink, TextAlign::BASELINE_LEFT, "%s --", gas_label);
+      } else {
+        it.printf(78, 190, id(font_small), ink, TextAlign::BASELINE_LEFT, "%s %.0f",
+                  gas_label, gas);
+      }
+
+      if (now.is_valid()) {
+        it.strftime(190, 190, id(font_time), ink, TextAlign::BASELINE_RIGHT, "%H:%M", now);
+      } else {
+        it.print(190, 190, id(font_time), ink, TextAlign::BASELINE_RIGHT, "--:--");
       }
